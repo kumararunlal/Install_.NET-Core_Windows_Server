@@ -1,0 +1,117 @@
+
+---
+- name: Install .NET Core on Windows servers from a central source
+  hosts: windows
+  gather_facts: no
+  collections:
+    - ansible.windows
+    - community.windows
+
+  vars:
+    # ---- Source (central) server where the installers live ----
+    source_server: "vmwus31swtds203"
+    source_dir: "C:\\Temp\\DotNetInstallers"
+    # UNC path (administrative share); adjust if you use a dedicated share
+    source_unc: "\\\\{{ source_server }}\\C$\\Temp\\DotNetInstallers"
+
+    # ---- Destination path on each target Windows server ----
+    dest_dir: "C:\\Temp\\DotNetInstallers"
+
+    # ---- List of installers to deploy/install silently ----
+    installers:
+      - "dotnet-hosting-9.0.10-win.exe"
+      - "aspnetcore-runtime-9.0.10-win-x64.exe"
+      - "aspnetcore-runtime-9.0.10-win-x86.exe"
+      - "dotnet-runtime-9.0.10-win-x64.exe"
+      - "dotnet-runtime-9.0.10-win-x86.exe"
+
+    # ---- Optional: credentials to access source UNC (if needed) ----
+    # If your main AAP Windows credential already has share access, leave blank.
+    share_username: ""        # e.g. "DOMAIN\\svc_ansible_share" or "vmwus31swtds203\\localuser"
+    share_password: ""        # recommend storing in AAP Credential or Ansible Vault
+    share_target: "{{ source_server }}"  # host for cmdkey; could also be 'fileserver.domain.local'
+
+    # ---- Silent install switches ----
+    quiet_args: "/quiet /norestart"
+
+    # ---- Logging ----
+    log_dir: "C:\\Temp\\DotNetInstallLogs"
+    log_file: "{{ log_dir }}\\dotnet_install_{{ inventory_hostname }}.log"
+
+  pre_tasks:
+    - name: Ensure destination directory exists on target
+      ansible.windows.win_file:
+        path: "{{ dest_dir }}"
+        state: directory
+
+    - name: Ensure log directory exists on target
+      ansible.windows.win_file:
+        path: "{{ log_dir }}"
+        state: directory
+
+    - name: Add credentials for source UNC (cmdkey) if provided
+      ansible.windows.win_command: >
+        cmdkey /add:{{ share_target }} /user:{{ share_username }} /pass:{{ share_password }}
+      when:
+        - share_username | length > 0
+        - share_password | length > 0
+
+  tasks:
+    - name: Copy installers from source UNC to local destination (robocopy)
+      ansible.windows.win_command: >
+        robocopy "{{ source_unc }}" "{{ dest_dir }}" {{ installers | join(' ') }} /COPY:DAT /R:2 /W:5 /NFL /NDL /NP
+      register: copy_result
+      changed_when: copy_result.rc == 1 or copy_result.rc == 3
+      # robocopy exit codes: 0 (no files copied), 1/2/3 often mean success/with extras; >3 may indicate issues.
+
+    - name: Show robocopy result
+      ansible.builtin.debug:
+        var: copy_result
+
+    - name: Install .NET components silently
+      ansible.windows.win_powershell:
+        script: |
+          Start-Transcript -Path "{{ log_file }}" -Append
+          $ErrorActionPreference = "Stop"
+
+          $installers = {{ installers | to_json }}
+          foreach ($i in $installers) {
+            $exe = Join-Path "{{ dest_dir }}" $i
+            if (Test-Path $exe) {
+              Write-Host "Installing: $exe"
+              Start-Process -FilePath $exe -ArgumentList "{{ quiet_args }}" -Wait -PassThru | Out-Null
+            } else {
+              Write-Error "Installer not found: $exe"
+            }
+          }
+
+          # Optional: quick validation — list installed runtimes/SDKs if dotnet is on PATH
+          try {
+            Write-Host "dotnet --list-runtimes"
+            dotnet --list-runtimes
+            Write-Host "dotnet --list-sdks"
+            dotnet --list-sdks
+          } catch {
+            Write-Host "dotnet CLI not yet in PATH or not applicable (hosting/runtime only)."
+          }
+
+          Stop-Transcript | Out-Null
+        executable: powershell.exe
+      register: install_result
+
+    - name: Show installation transcript path
+      ansible.builtin.debug:
+        msg:
+          - "Transcript/log: {{ log_file }}"
+          - "Install result RC: {{ install_result.rc | default('') }}"
+
+  post_tasks:
+    - name: Remove cmdkey credential (cleanup) if used
+      ansible.windows.win_command: >
+        cmdkey /delete:{{ share_target }}
+      when: share_username | length > 0
+
+    - name: Fail if installation RC indicates error
+      ansible.builtin.fail:
+        msg: "Installation reported error (RC={{ install_result.rc }}). Check {{ log_file }}."
+      when: install_result.rc | int != 0
