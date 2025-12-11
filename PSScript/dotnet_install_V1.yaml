@@ -1,0 +1,104 @@
+
+# playbooks/dotnet_install.yml
+---
+- name: Install .NET 9.0.10 components on Windows servers
+  hosts: dotnet_targets
+  gather_facts: no
+  vars_files:
+    - ../group_vars/dotnet_targets.yml
+
+  pre_tasks:
+    - name: Ensure C:\Temp exists
+      ansible.windows.win_file:
+        path: "{{ temp_dir }}"
+        state: directory
+
+    - name: Ensure installer target directory exists
+      ansible.windows.win_file:
+        path: "{{ target_path }}"
+        state: directory
+
+    - name: Ensure log file exists
+      ansible.windows.win_file:
+        path: "{{ log_path }}"
+        state: touch
+
+    - name: Optionally mount the source admin share if credentials are provided
+      ansible.windows.win_shell: >
+        net use {{ source_path | regex_replace('\\\\'+source_server+'\\\\', '\\\\' + source_server + '\\\\') }}
+        /user:{{ share_username }} "{{ share_password }}"
+      when:
+        - share_username is defined
+        - share_username | length > 0
+      changed_when: false
+      register: net_use_result
+
+  tasks:
+    - name: Copy installers from source server (UNC) to target path (robocopy)
+      community.windows.win_robocopy:
+        src: "{{ source_path }}"
+        dest: "{{ target_path }}"
+        recurse: true
+        purge: false        # do not delete extra files at dest
+        restart: true       # restartable mode for large files
+      register: copy_result
+
+    - name: Log copy summary
+      ansible.windows.win_lineinfile:
+        path: "{{ log_path }}"
+        line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - COPY: {{ copy_result.stdout | default('completed') }}"
+        create: yes
+
+    - name: Install each .NET installer silently (/quiet /norestart)
+      block:
+        - name: Check installer presence
+          ansible.windows.win_stat:
+            path: "{{ target_path }}\\{{ item }}"
+          register: installer_stat
+          loop: "{{ installers }}"
+          loop_control:
+            loop_var: item
+
+        - name: Install present installers
+          block:
+            - name: Log start of installation
+              ansible.windows.win_lineinfile:
+                path: "{{ log_path }}"
+                line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - Installing {{ item }}"
+                create: yes
+
+            - name: Run installer
+              ansible.windows.win_command: >
+                "{{ target_path }}\\{{ item }}" /quiet /norestart
+              register: install_rc
+              changed_when: install_rc.rc == 0
+              failed_when: install_rc.rc != 0
+
+            - name: Log installation result (SUCCESS)
+              ansible.windows.win_lineinfile:
+                path: "{{ log_path }}"
+                line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - {{ item }} install result: SUCCESS"
+                create: yes
+          when: installer_stat.results[ansible_loop.index0].stat.exists | default(false)
+
+        - name: Log missing installer
+          ansible.windows.win_lineinfile:
+            path: "{{ log_path }}"
+            line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - MISSING: {{ target_path }}\\{{ item }}"
+            create: yes
+          when: not installer_stat.results[ansible_loop.index0].stat.exists | default(false)
+      vars:
+        # Enable loop index access
+        ansible_loop_var: item
+
+  post_tasks:
+    - name: Cleanup installer folder
+      ansible.windows.win_file:
+        path: "{{ target_path }}"
+        state: absent
+
+    - name: Log cleanup
+      ansible.windows.win_lineinfile:
+        path: "{{ log_path }}"
+        line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - CLEANUP: Deleted {{ target_path }}"
+        create: yes
