@@ -1,0 +1,21 @@
+
+# group_vars/dotnet_targets.yml
+source_server: "vmwus31swtds205"
+source_path: "\\{{ source_server }}\\C$\\Installers\\DotNet"
+target_path: "C:\\Temp\\DotNetInstallers"
+temp_dir: "C:\\Temp"
+log_path: "C:\\Temp\\dotnet_install_log.txt"
+
+# List of installers to run
+installers:
+  - "dotnet-hosting-9.0.10-win.exe"
+  - "aspnetcore-runtime-9.0.10-win-x64.exe"
+  - "aspnetcore-runtime-9.0.10-win-x86.exe"
+  - "dotnet-runtime-9.0.10-win-x64.exe"
+  - "dotnet-runtime-9.0.10-win-x86.exe"
+
+# Optional: if your WinRM user cannot read \\source\C$,
+# provide alternate credentials to mount the share.
+# Leave blank or remove if not needed.
+share_username: ""     # e.g. "DOMAIN\\service_account"
+share_password: ""     # e.g. "SuperSecret!"
