@@ -35,7 +35,7 @@
       failed_when: run_result.rc != 0
 
     - name: Log execution result
-      ansible.windows.win_lineinfile:
+      ansible.windows.win_file:
         path: "{{ log_path }}"
         line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - EXEC: rc={{ run_result.rc }} - {{ (run_result.stdout | default('')).split('\n') | join(' ') }}"
         create: yes
@@ -43,6 +43,6 @@
     - name: Show script output in job log
       ansible.builtin.debug:
         msg:
-          - "Return code: {{ run_result.rc          - "Return code: {{ run_result.rc }}"
+          - "Return code: {{ run_result.rc }}"
           - "Stdout: {{ run_result.stdout | default('') }}"
- 
+          - "Stderr: {{ run_result.stderr | default('') }}"
