@@ -1,0 +1,55 @@
+
+---
+- name: Run PowerShell script already present on target (Domain Admin)
+  hosts: all
+  gather_facts: yes
+  collections:
+    - ansible.windows
+
+  vars:
+    # --- WinRM & escalation ---
+    ansible_connection: winrm
+    ansible_winrm_transport: credssp
+    ansible_port: 5986
+    ansible_winrm_server_cert_validation: ignore
+
+    ansible_become: yes
+    ansible_become_method: runas
+    ansible_become_user: "DOMAIN\\DomainAdminUser"       # <-- run elevated as this account
+    ansible_become_password: "DomainAdminPassword"       # <-- vault this in AAP
+
+    # --- Script & log paths ---
+    script_path: "C:\\Installers\\DotNet\\dotnet install_v1.ps1"
+    script_args: ""                                      # can be overridden via Extra Vars/Survey
+    log_path: "C:\\Temp\\dotnet_install.log"
+
+  tasks:
+    - name: Ensure log directory exists
+      ansible.windows.win_file:
+        path: "{{ log_path | regex_replace('\\\\[^\\\\]+$', '') }}"  # extracts C:\Temp
+        state: directory
+
+    - name: Verify script exists
+      ansible.windows.win_powershell:
+        script: |
+          $p = "{{ script_path }}"
+          if (-not (Test-Path -LiteralPath $p)) {
+            Write-Error "Script not found: $p"
+          }
+
+    - name: Execute PowerShell script as Domain Admin (runas)
+      ansible.windows.win_powershell:
+        script: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "Starting: {{ script_path }} {{ script_args | default('') }}"
+          & "{{ script_path }}" {{ script_args | default('') }}
+          Write-Host "Completed successfully."
+      register: run_result
+      failed_when: run_result.rc != 0
+
+    - name: Show script output in job log
+      ansible.builtin.debug:
+        msg:
+          - "Return code: {{ run_result.rc }}"
+          - "Stdout: {{ run_result.stdout | default('') }}"
+          - "Stderr: {{ run_result.stderr | default('') }}"
