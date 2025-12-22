@@ -1,0 +1,48 @@
+
+---
+- name: Run PowerShell script already present on target
+  hosts: all
+  gather_facts: no
+  collections:
+    - ansible.windows
+
+  vars:
+    script_path: "C:\\Installers\\DotNet\\dotnet install_v1.ps1"
+    log_path: "C:\\Temp\\dotnet_install.log"
+    
+  tasks:
+    - name: Ensure log directory exists
+      ansible.windows.win_file:
+        path: "{{ log_path | regex_replace('\\\\[^\\\\]+$','') }}"
+        state: directory
+
+    - name: Verify script exists
+      ansible.windows.win_powershell:
+        script: |
+          $p = "{{ script_path }}"
+          if (-not (Test-Path $p)) {
+            Write-Error "Script not found: $p"
+          }
+
+    - name: Execute PowerShell script
+      ansible.windows.win_powershell:
+        script: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "Starting: {{ script_path }} {{ script_args }}"
+          & "{{ script_path }}" {{ script_args }}
+          Write-Host "Completed successfully."
+      register: run_result
+      failed_when: run_result.rc != 0
+
+    - name: Log execution result
+      ansible.windows.win_lineinfile:
+        path: "{{ log_path }}"
+        line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - EXEC: rc={{ run_result.rc }} - {{ (run_result.stdout | default('')).split('\n') | join(' ') }}"
+        create: yes
+
+    - name: Show script output in job log
+      ansible.builtin.debug:
+        msg:
+          - "Return code: {{ run_result.rc          - "Return code: {{ run_result.rc }}"
+          - "Stdout: {{ run_result.stdout | default('') }}"
+ 
