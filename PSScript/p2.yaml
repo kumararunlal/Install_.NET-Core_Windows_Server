@@ -1,0 +1,103 @@
+
+# List of target servers
+$servers = Get-Content -Path "C:\Installers\DotNet\servers.txt"
+
+# Source server (where setup files are stored) - FQDN or IP
+$sourceServer = "vmwus31swtds203"
+
+# Path on source server containing installers
+$sourcePath = "\\$sourceServer\C$\Installers\DotNet"
+
+# Path on remote target where installers will be copied
+$targetPath = "C:\Temp\DotNetInstallers"
+
+# Output log file path on remote servers
+$logPath = "C:\Temp\dotnet_install_log.txt"
+
+# --- NEW: Get Domain Admin credentials once ---
+$cred = Get-Credential -Message "Enter Domain Admin (e.g., DOMAIN\admin_user)"
+
+# Script block to execute on remote servers (installation logic)
+$installScript = {
+    param($targetPath, $logPath)
+
+    if (-not (Test-Path -LiteralPath "C:\Temp")) {
+        New-Item -Path "C:\Temp" -ItemType Directory -Force | Out-Null
+    }
+
+    $installers = @(
+        "windowsdesktop-runtime-8.0.21-win-x64.exe",  # fixed extension
+        "aspnetcore-runtime-9.0.10-win-x64.exe",
+        "aspnetcore-runtime-9.0.10-win-x86.exe",
+        "dotnet-runtime-9.0.10-win-x64.exe",
+        "dotnet-runtime-9.0.10-win-x86.exe"
+    )
+
+    foreach ($installer in $installers) {
+        $fullPath = Join-Path $targetPath $installer
+
+        if (Test-Path -LiteralPath $fullPath) {
+            $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            Add-Content -Path $logPath -Value "$timestamp - Installing $installer"
+
+            # Install silently and prevent reboot
+            try {
+                $exitCode = (Start-Process -FilePath $fullPath -ArgumentList "/quiet /norestart" -Wait -PassThru).ExitCode
+                $result = if ($exitCode -eq 0) { "SUCCESS" } else { "FAILED (Exit Code: $exitCode)" }
+                Add-Content -Path $logPath -Value "$timestamp - $installer install result: $result"
+            } catch {
+                Add-Content -Path $logPath -Value "$timestamp - ERROR: $($_.Exception.Message)"
+            }
+        }
+        else {
+            Add-Content -Path $logPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - MISSING: $fullPath"
+        }
+    }
+}
+
+# Cleanup script to run after install
+$cleanupScript = {
+    param($targetPath, $logPath)
+    if (Test-Path -LiteralPath $targetPath) {
+        try {
+            Remove-Item -LiteralPath $targetPath -Recurse -Force
+            Add-Content -Path $logPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - CLEANUP: Deleted $targetPath"
+        }
+        catch {
+            Add-Content -Path $logPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - CLEANUP FAILED: $($_.Exception.Message)"
+        }
+    }
+}
+
+# Main loop to process each server
+foreach ($server in $servers) {
+    Write-Host ">>> Processing $server..."
+
+    # Ensure target directory exists (remote) with Domain Admin credential
+    Invoke-Command -ComputerName $server -Credential $cred -ScriptBlock {
+        param($targetPath)
+        if (-not (Test-Path -LiteralPath $targetPath)) {
+            New-Item -Path $targetPath -ItemType Directory -Force | Out-Null
+        }
+        if (-not (Test-Path -LiteralPath 'C:\Temp')) {
+            New-Item -Path 'C:\Temp' -ItemType Directory -Force | Out-Null
+        }
+    } -ArgumentList $targetPath
+
+    # Map source and destination admin shares with the same credential (for UNC copy)
+    $user = $cred.UserName
+    $pass = $cred.GetNetworkCredential().Password
+    cmd /c net use "\\$sourceServer\C$" $pass /USER:$user /PERSISTENT:NO | Out-Null
+    cmd /c net use "\\$server\C$"       $pass /USER:$user /PERSISTENT:NO | Out-Null
+
+    # Copy files to remote server (Copy-Item or Robocopy)
+    Copy-Item -Path "$sourcePath\*" -Destination "\\$server\C$\Temp\DotNetInstallers" -Recurse -Force
+
+    # Run installation as Domain Admin
+    Invoke-Command -ComputerName $server -Credential $cred -ScriptBlock $installScript -ArgumentList $targetPath, $logPath
+
+    # Run cleanup as Domain Admin
+    Invoke-Command -ComputerName $server -Credential $cred -ScriptBlock $cleanupScript -ArgumentList $targetPath, $logPath
+
+    Write-Host ">>> Completed $server`n"
+}
