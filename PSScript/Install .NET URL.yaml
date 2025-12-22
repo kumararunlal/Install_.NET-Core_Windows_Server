@@ -1,7 +1,7 @@
 
 --- 
 - name: Install .NET 9.0.10 packages directly from URLs (Windows)
-  hosts: windows_targets            # <--- Inventory group of target servers
+  hosts: all            # <--- Inventory group of target servers
   gather_facts: yes                 # <--- Collect facts (used for architecture check)
   vars:
     download_dir: 'C:\Temp\DotNetInstallers'     # Where installers will be downloaded
@@ -11,21 +11,24 @@
       - { filename: 'dotnet-hosting-9.0.10-win.exe',
           url: 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/dotnet-hosting-9.0.10-win.exe',
           args: '/quiet /norestart' }
-      - { filename: 'aspnetcore-runtime-9.0.10-win-x64.exe',
-          url: 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-win-x64.exe',
-          args: '/quiet /norestart' }
-      - { filename: 'aspnetcore-runtime-9.0.10-win-x86.exe',
-          url: 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-win-x86.exe',
-          args: '/quiet /norestart' }
-      - { filename: 'dotnet-runtime-9.0.10-win-x64.exe',
-          url: 'https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-win-x64.exe',
-          args: '/quiet /norestart' }
-      - { filename: 'dotnet-runtime-9.0.10-win-x86.exe',
-          url: 'https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-win-x86.exe',
-          args: '/quiet /norestart' }
-      - { filename: 'windowsdesktop-runtime-9.0.10-win-x64.exe',
-          url: 'https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/9.0.10/windowsdesktop-runtime-9.0.10-win-x64.exe',
-          args: '/quiet /norestart' }
+      #  - { filename: 'dotnet-hosting-9.0.10-win.exe',
+      #    url: 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/dotnet-hosting-9.0.10-win.exe',
+      #    args: '/quiet /norestart' }
+      #- { filename: 'aspnetcore-runtime-9.0.10-win-x64.exe',
+      #    url: 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-win-x64.exe',
+      #    args: '/quiet /norestart' }
+      #- { filename: 'aspnetcore-runtime-9.0.10-win-x86.exe',
+      #    url: 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-win-x86.exe',
+      #    args: '/quiet /norestart' }
+      #- { filename: 'dotnet-runtime-9.0.10-win-x64.exe',
+      #    url: 'https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-win-x64.exe',
+      #    args: '/quiet /norestart' }
+      #- { filename: 'dotnet-runtime-9.0.10-win-x86.exe',
+      #    url: 'https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-win-x86.exe',
+      #    args: '/quiet /norestart' }
+      #- { filename: 'windowsdesktop-runtime-9.0.10-win-x64.exe',
+      #    url: 'https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/9.0.10/windowsdesktop-runtime-9.0.10-win-x64.exe',
+      #    args: '/quiet /norestart' }
 
   pre_tasks:
     - name: Ensure C:\Temp exists
