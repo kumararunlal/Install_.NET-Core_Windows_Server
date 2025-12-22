@@ -1,0 +1,39 @@
+--- 
+- name: Run PowerShell script on Windows servers
+  hosts: all
+  gather_facts: no
+
+  vars:
+    script_path: "C:\\scripts\\maintenance.ps1"   
+    arguments: "-Param1 Value1 -Verbose"       
+
+  tasks:
+
+    - name: Ensure PowerShell script exists on target
+      win_stat:
+        path: "{{ script_path }}"
+      register: script_check
+
+    - name: Fail if PowerShell script is missing
+      fail:
+        msg: "The script {{ script_path }} was not found on {{ inventory_hostname }}."
+      when: not script_check.stat.exists
+
+    - name: Execute PowerShell script
+      win_shell: |
+        PowerShell -ExecutionPolicy Bypass -File "{{ script_path }}" {{ arguments }}
+      register: ps_result
+      args:
+        executable: powershell
+
+    - name: Print PowerShell script output
+      debug:
+        msg: |
+          ==== PowerShell Execution Result on {{ inventory_hostname }} ====
+          Stdout:
+          {{ ps_result.stdout | default('No output') }}
+
+          Stderr:
+          {{ ps_result.stderr | default('No errors') }}
+
+          Exit Code: {{ ps_result.rc }}
