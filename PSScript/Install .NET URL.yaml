@@ -1,0 +1,160 @@
+
+--- 
+- name: Install .NET 9.0.10 packages directly from URLs (Windows)
+  hosts: windows_targets            # <--- Inventory group of target servers
+  gather_facts: yes                 # <--- Collect facts (used for architecture check)
+  vars:
+    download_dir: 'C:\Temp\DotNetInstallers'     # Where installers will be downloaded
+    log_path: 'C:\Temp\dotnet_install_log.txt'   # Log file per host
+    install_x86_on_x64: false                    # Skip x86 on x64 by default (set true to include)
+    installers:                                  # Packages from official Microsoft builds site
+      - { filename: 'dotnet-hosting-9.0.10-win.exe',
+          url: 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/dotnet-hosting-9.0.10-win.exe',
+          args: '/quiet /norestart' }
+      - { filename: 'aspnetcore-runtime-9.0.10-win-x64.exe',
+          url: 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-win-x64.exe',
+          args: '/quiet /norestart' }
+      - { filename: 'aspnetcore-runtime-9.0.10-win-x86.exe',
+          url: 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-win-x86.exe',
+          args: '/quiet /norestart' }
+      - { filename: 'dotnet-runtime-9.0.10-win-x64.exe',
+          url: 'https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-win-x64.exe',
+          args: '/quiet /norestart' }
+      - { filename: 'dotnet-runtime-9.0.10-win-x86.exe',
+          url: 'https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-win-x86.exe',
+          args: '/quiet /norestart' }
+      - { filename: 'windowsdesktop-runtime-9.0.10-win-x64.exe',
+          url: 'https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/9.0.10/windowsdesktop-runtime-9.0.10-win-x64.exe',
+          args: '/quiet /norestart' }
+
+  pre_tasks:
+    - name: Ensure C:\Temp exists
+      ansible.windows.win_file:
+        path: 'C:\Temp'
+        state: directory
+
+    - name: Ensure download directory exists
+      ansible.windows.win_file:
+        path: '{{ download_dir }}'
+        state: directory
+
+    - name: Ensure log file exists
+      ansible.windows.win_file:
+        path: '{{ log_path }}'
+        state: touch
+
+    - name: Determine if OS is 64-bit
+      set_fact:
+        os_is_64: "{{ (ansible_architecture | lower) is search('64') }}"
+
+    - name: Decide which installers to install (skip x86 on x64 if configured)
+      set_fact:
+        installers_to_install: >-
+          {% if os_is_64 and not install_x86_on_x64 %}
+          {{ installers | rejectattr('filename', 'search', '-x86.exe') | list }}
+          {% else %}
+          {{ installers }}
+          {% endif %}
+
+  tasks:
+    - name: Log connectivity for each installer host:443
+      ansible.windows.win_shell: |
+        $hostName = ([uri]"{{ item.url }}").Host
+        try {
+          $reachable = Test-NetConnection -ComputerName $hostName -Port 443 -InformationLevel Quiet
+          Add-Content -Path "{{ log_path }}" -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - CONNECTIVITY: $hostName:443 reachable=$reachable"
+        } catch {
+          Add-Content -Path "{{ log_path }}" -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - CONNECTIVITY CHECK FAILED for $hostName:443 - $($_.Exception.Message)"
+        }
+      loop: "{{ installers_to_install }}"
+      loop_control:
+        label: "{{ item.filename }}"
+
+    - name: Download each installer (try win_get_url, fallback to BITS on failure)
+      block:
+        - name: Log download start
+          ansible.windows.win_lineinfile:
+            path: "{{ log_path }}"
+            line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - DOWNLOAD START: {{ item.filename }} from {{ item.url }}"
+            insertafter: EOF
+            create: yes
+
+        - name: Download via win_get_url
+          ansible.windows.win_get_url:
+            url: "{{ item.url }}"
+            dest: "{{ download_dir }}\\{{ item.filename }}"
+            timeout: 600
+          register: get_url_result
+
+        - name: Log download size (win_get_url)
+          ansible.windows.win_shell: |
+            $size = (Get-Item "{{ download_dir }}\{{ item.filename }}").Length
+            Add-Content -Path "{{ log_path }}" -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - DOWNLOADED: {{ item.filename }} ($size bytes)"
+          when: get_url_result is succeeded
+
+      rescue:
+        - name: Fallback download via BITS (Start-BitsTransfer)
+          ansible.windows.win_shell: |
+            try {
+              [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            } catch {}
+            Start-BitsTransfer -Source "{{ item.url }}" -Destination "{{ download_dir }}\{{ item.filename }}" -ErrorAction Stop
+          register: bits_result
+
+        - name: Log download size (BITS)
+          ansible.windows.win_shell: |
+            $size = (Get-Item "{{ download_dir }}\{{ item.filename }}").Length
+            Add-Content -Path "{{ log_path }}" -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - DOWNLOADED (BITS): {{ item.filename }} ($size bytes)"
+          when: bits_result is succeeded
+
+        - name: Log download failure
+          ansible.windows.win_lineinfile:
+            path: "{{ log_path }}"
+            line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - DOWNLOAD FAILED: {{ item.filename }}"
+            insertafter: EOF
+            create: yes
+          when: bits_result is failed
+      loop: "{{ installers_to_install }}"
+      loop_control:
+        label: "{{ item.filename }}"
+
+    - name: Install each package silently (treat rc 0 and 3010 as success)
+      ansible.windows.win_command: >-
+        "{{ download_dir }}\{{ item.filename }}" {{ item.args }}
+      register: install_result
+      failed_when: install_result.rc not in [0, 3010]
+      changed_when: install_result.rc in [0, 3010]
+      loop: "{{ installers_to_install }}"
+      loop_control:
+        label: "{{ item.filename }}"
+
+    - name: Log install result for each package
+      ansible.windows.win_shell: |
+        $rc = {{ install_result.rc }}
+        if ($rc -eq 0) { $status = "SUCCESS" }
+        elseif ($rc -eq 3010) { $status = "SUCCESS (reboot required)" }
+        else { $status = "FAILED (ExitCode=$rc)" }
+        Add-Content -Path "{{ log_path }}" -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - INSTALL RESULT: {{ item.filename }} -> $status"
+      loop: "{{ installers_to_install }}"
+      loop_control:
+        label: "{{ item.filename }}"
+
+    - name: Log completion of download & install
+      ansible.windows.win_lineinfile:
+        path: "{{ log_path }}"
+        line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - COMPLETED: Download & Install sequence"
+        insertafter: EOF
+        create: yes
+
+  post_tasks:
+    - name: Cleanup downloaded installers
+      ansible.windows.win_file:
+        path: "{{ download_dir }}"
+        state: absent
+
+    - name: Log cleanup result
+      ansible.windows.win_lineinfile:
+        path: "{{ log_path }}"
+        line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }}        line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }} - CLEANUP: Deleted {{ download_dir }}"
+        insertafter: EOF
+ 
