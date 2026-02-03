@@ -1,0 +1,103 @@
+# PowerShell - Get IIS version from multiple remote servers
+
+# === Configuration ===
+$computers = @(
+    "server01",
+    "server02",
+    "server03",
+    "webprod-01.domain.local",
+    # Add more servers here
+    # or read from file: $computers = Get-Content "C:\servers.txt"
+)
+
+$outputFile = "C:\Reports\IIS_Versions_$(Get-Date -Format 'yyyy-MM-dd_HHmm').csv"
+
+# Optional: Credential (if not using Kerberos/Trusted delegation)
+# $cred = Get-Credential -Message "Enter domain admin credentials"
+
+Write-Host "Starting IIS version check..." -ForegroundColor Cyan
+Write-Host "Results will be saved to: $outputFile`n"
+
+$results = @()
+
+foreach ($computer in $computers) {
+    Write-Host "Checking $computer ..." -NoNewline -ForegroundColor Gray
+    
+    $result = [PSCustomObject]@{
+        ComputerName   = $computer
+        IISVersion     = "Unknown"
+        MajorVersion   = "N/A"
+        Status         = "Failed"
+        ErrorMessage   = ""
+        Timestamp      = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    }
+    
+    try {
+        # Method 1: Query via registry (most reliable)
+        $reg = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine', $computer)
+        $key = $reg.OpenSubKey("SOFTWARE\Microsoft\InetStp")
+        
+        if ($key) {
+            $versionString = $key.GetValue("VersionString")
+            $majorVersion  = $key.GetValue("MajorVersion")
+            
+            if ($versionString) {
+                $result.IISVersion   = $versionString
+                $result.MajorVersion = $majorVersion
+                $result.Status       = "Success"
+            }
+            $key.Close()
+        }
+        $reg.Close()
+        
+        # Fallback method if registry didn't work
+        if ($result.Status -eq "Failed") {
+            $iisInfo = Invoke-Command -ComputerName $computer -ErrorAction Stop -ScriptBlock {
+                if (Get-Module -ListAvailable WebAdministration) {
+                    Import-Module WebAdministration -ErrorAction SilentlyContinue
+                    $iis = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\InetStp"
+                    [PSCustomObject]@{
+                        VersionString = $iis.VersionString
+                        MajorVersion  = $iis.MajorVersion
+                    }
+                }
+            }
+            
+            if ($iisInfo) {
+                $result.IISVersion   = $iisInfo.VersionString
+                $result.MajorVersion = $iisInfo.MajorVersion
+                $result.Status       = "Success (via PS Remoting)"
+            }
+        }
+    }
+    catch {
+        $result.ErrorMessage = $_.Exception.Message
+        if ($_.Exception.Message -match "Access is denied") {
+            $result.Status = "Access Denied"
+        }
+        elseif ($_.Exception.Message -match "WinRM") {
+            $result.Status = "WinRM / PSRemoting issue"
+        }
+    }
+    
+    $results += $result
+    
+    if ($result.Status -eq "Success" -or $result.Status -like "Success*") {
+        Write-Host " OK" -ForegroundColor Green
+    }
+    else {
+        Write-Host " FAILED ($($result.Status))" -ForegroundColor Red
+    }
+}
+
+# Export results
+$results | Sort-Object ComputerName | Export-Csv -Path $outputFile -NoTypeInformation -Encoding UTF8
+
+Write-Host "`nDone!" -ForegroundColor Cyan
+Write-Host "Total servers checked : $($computers.Count)"
+Write-Host "Successful             : $($results.Where({$_.Status -like '*Success*'}).Count)"
+Write-Host "Failed                 : $($results.Where({$_.Status -notlike '*Success*'}).Count)"
+Write-Host "Report saved to        : $outputFile" -ForegroundColor Yellow
+
+# Optional: open the file
+# Invoke-Item $outputFile
