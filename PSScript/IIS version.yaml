@@ -1,0 +1,36 @@
+---
+- name: Collect IIS version from Windows servers
+  hosts: all
+  gather_facts: false
+  connection: winrm
+
+  tasks:
+    - name: Get IIS VersionString (64-bit path)
+      ansible.windows.win_reg_stat:
+        path: HKLM:\SOFTWARE\Microsoft\InetStp
+        name: VersionString
+      register: reg_iis_normal
+      failed_when: false
+      ignore_errors: true
+
+    - name: Get IIS VersionString (32-bit WOW fallback)
+      ansible.windows.win_reg_stat:
+        path: HKLM:\SOFTWARE\WOW6432Node\Microsoft\InetStp
+        name: VersionString
+      register: reg_iis_wow
+      when: reg_iis_normal.stat.exists is false or reg_iis_normal.value is not defined or reg_iis_normal.value == ''
+      failed_when: false
+      ignore_errors: true
+
+    - name: Set final IIS version
+      ansible.builtin.set_fact:
+        iis_version: >-
+          {{
+            reg_iis_normal.value
+            if (reg_iis_normal.stat.exists | default(false) and reg_iis_normal.value is defined and reg_iis_normal.value != '')
+            else (reg_iis_wow.value if (reg_iis_wow.stat.exists | default(false) and reg_iis_wow.value is defined and reg_iis_wow.value != '') else 'Not found')
+          }}
+
+    - name: Show IIS version
+      ansible.builtin.debug:
+        msg: "IIS Version = {{ iis_version | default('ERROR reading registry') }}"
