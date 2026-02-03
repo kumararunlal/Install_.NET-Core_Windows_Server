@@ -1,0 +1,56 @@
+# Read server names from text file
+$computers = Get-Content "C:\Temp\servers.txt"
+
+# Ensure output folder exists
+$outDir = 'C:\Temp'
+if (-not (Test-Path $outDir)) { New-Item -Path $outDir -ItemType Directory -Force | Out-Null }
+
+# Build output file path with timestamp
+$outFile = Join-Path $outDir ("IIS_Versions_{0}.csv" -f (Get-Date -Format 'yyyyMMdd_HHmm'))
+
+$computers | ForEach-Object {
+    $server = $_
+    try {
+        # Optional quick ping to avoid delays
+        if (-not (Test-Connection -ComputerName $server -Count 1 -Quiet)) {
+            return [pscustomobject]@{ Computer = $server; IISVersion = 'Unreachable' }
+        }
+
+        # Connect to remote registry
+        $base = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine', $server)
+
+        # Possible IIS registry paths
+        $paths = @(
+            'SOFTWARE\Microsoft\InetStp',
+            'SOFTWARE\WOW6432Node\Microsoft\InetStp'
+        )
+
+        $v = $null
+
+        foreach ($p in $paths) {
+            $sub = $base.OpenSubKey($p)
+            if ($sub) {
+                $v = $sub.GetValue('VersionString')
+                if ($v) { break }
+            }
+        }
+
+        # If no version found
+        if (-not $v) { $v = 'Not found' }
+
+        # Output object
+        [PSCustomObject]@{
+            Computer   = $server
+            IISVersion = $v
+        }
+    }
+    catch {
+        # Any connection or registry error
+        [PSCustomObject]@{
+            Computer   = $server
+            IISVersion = "Error: $($_.Exception.Message)"
+        }
+    }
+} | Export-Csv -Path $outFile -NoTypeInformation
+
+Write-Host "Saved results to: $outFile" -ForegroundColor Green
